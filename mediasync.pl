@@ -32,11 +32,14 @@ my $sync_dbh = DBI->connect("dbi:SQLite:dbname=${home_dir}${sync_db_file}", "", 
                 , "CREATE TABLE IF NOT EXISTS libraries_to_dirs (library_id INTEGER, dir_id INTEGER)"
                 , "CREATE UNIQUE INDEX IF NOT EXISTS library_id_dir_id ON libraries_to_dirs (library_id, dir_id)"
                 # files table
-                , "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, name varchar(255) NOT NULL)"
+                , "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, name varchar(255) NOT NULL, updated INTEGER NOT NULL)"
                 , "CREATE UNIQUE INDEX IF NOT EXISTS name ON files (name)"
                 # dirs to files table
                 , "CREATE TABLE IF NOT EXISTS dirs_to_files (dir_id INTEGER, file_id INTEGER, media_item_id INTEGER)"
                 , "CREATE UNIQUE INDEX IF NOT EXISTS dir_id_file_id ON dirs_to_files (dir_id, file_id)"
+                # resource properties table
+                , "CREATE TABLE IF NOT EXISTS resource_properties (file_id integer not null, property_id integer not null, obj text not null, obj_sortable text, obj_secondary_sortable text, primary key (file_id, property_id));"
+                , "CREATE INDEX IF NOT EXISTS idx_resource_properties_property_id_obj_sortable_obj_secondary_sortable_media_item_id on resource_properties (property_id, obj_sortable, obj_secondary_sortable, file_id)"
                 ,
                 );
 
@@ -87,13 +90,21 @@ if ($dir_path) {
     &query($sync_dbh, "INSERT INTO libraries_to_dirs (library_id, dir_id) VALUES ($library_id, $dir_id)");
 }
 
+$sth = $songbird_dbh->prepare("SELECT media_item_id, property_id, obj, obj_sortable, obj_secondary_sortable FROM resource_properties WHERE media_item_id = ? AND property_id NOT IN (20, 29)");
+my $insert = $sync_dbh->prepare("INSERT OR IGNORE INTO resource_properties (file_id, property_id, obj, obj_sortable, obj_secondary_sortable) VALUES (?, ?, ?, ?, ?)");
 foreach my $key (keys(%library_data)) {
+    my ($file_modified) = $songbird_dbh->selectrow_array("SELECT updated FROM media_items WHERE media_item_id = $key");
     $library_data{$key} =~ s/^$dir_path//;
-    &query($sync_dbh, "INSERT OR IGNORE INTO files (name) VALUES (".$sync_dbh->quote($library_data{$key}).")");
+    &query($sync_dbh, "INSERT OR IGNORE INTO files (name, updated) VALUES (".$sync_dbh->quote($library_data{$key}).", $file_modified)");
     my $file_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
     &query($sync_dbh, "INSERT INTO dirs_to_files (dir_id, file_id, media_item_id) VALUES ($dir_id, $file_id, $key)");
 
     # the updated field in media_items reflects any change to the metadata of this song
+    $sth->execute($key);
+    while (my ($media_item_id, $property_id, $obj, $obj_sortable, $obj_secondary_sortable) = $sth->fetchrow_array()) {
+        # data is stored with media_item_id in songbird, but we're going to store with file_id here
+        $insert->execute($file_id, $property_id, $obj, $obj_sortable, $obj_secondary_sortable);
+    }
 }
 
 $songbird_dbh->disconnect();
