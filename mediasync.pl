@@ -40,7 +40,13 @@ my $sync_dbh = DBI->connect("dbi:SQLite:dbname=${home_dir}${sync_db_file}", "", 
                 ,
                 );
 
-my $sth = $sync_dbh->prepare("SELECT l.name FROM libraries l INNER JOIN hosts_to_libraries htl ON htl.library_id = l.id INNER JOIN hosts h ON htl.host_id = h.id WHERE h.name = ".$sync_dbh->quote($hostname));
+my $sth = $sync_dbh->prepare("SELECT l.name
+                              FROM libraries l
+                              INNER JOIN hosts_to_libraries htl
+                              ON htl.library_id = l.id
+                              INNER JOIN hosts h
+                              ON htl.host_id = h.id
+                              WHERE h.name = ".$sync_dbh->quote($hostname));
 $sth->execute() || die $sync_dbh->errstr;
 my $library_id = 0;
 if (!$sth->rows()) {
@@ -60,7 +66,10 @@ undef $sth;
 my $songbird_dbh = DBI->connect("dbi:SQLite:dbname=${songbird_library}", "", "", { RaiseError => 0 }, ) or die $DBI::errstr;
 
 # this is the list of paths
-$sth = $songbird_dbh->prepare("SELECT media_item_id, obj FROM resource_properties WHERE property_id = 20 AND obj LIKE 'file%';");
+$sth = $songbird_dbh->prepare("SELECT media_item_id, obj
+                               FROM resource_properties
+                               WHERE property_id = 20
+                               AND obj LIKE 'file%';");
 $sth->execute() || die $songbird_dbh->errstr;
 my %library_data;
 while (my ($media_item_id, $obj) = $sth->fetchrow_array()) {
@@ -80,9 +89,11 @@ if ($dir_path) {
 
 foreach my $key (keys(%library_data)) {
     $library_data{$key} =~ s/^$dir_path//;
-    &query($sync_dbh, "INSERT INTO files (name) VALUES (".$sync_dbh->quote($library_data{$key}).")");
+    &query($sync_dbh, "INSERT OR IGNORE INTO files (name) VALUES (".$sync_dbh->quote($library_data{$key}).")");
     my $file_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
     &query($sync_dbh, "INSERT INTO dirs_to_files (dir_id, file_id, media_item_id) VALUES ($dir_id, $file_id, $key)");
+
+    # the updated field in media_items reflects any change to the metadata of this song
 }
 
 $songbird_dbh->disconnect();
