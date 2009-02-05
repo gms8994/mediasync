@@ -30,15 +30,24 @@ my $sync_dbh = DBI->connect("dbi:SQLite:dbname=${home_dir}${sync_db_file}", "", 
                 , "CREATE UNIQUE INDEX IF NOT EXISTS name ON dirs (name)"
                 # libraries to dirs table
                 , "CREATE TABLE IF NOT EXISTS libraries_to_dirs (library_id INTEGER, dir_id INTEGER)"
-                , "CREATE UNIQUE INDEX IF NOT EXISTS library_id_dir_id ON libraries_to_dirs (library_id, dir_id)");
+                , "CREATE UNIQUE INDEX IF NOT EXISTS library_id_dir_id ON libraries_to_dirs (library_id, dir_id)"
+                # files table
+                , "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, name varchar(255) NOT NULL)"
+                , "CREATE UNIQUE INDEX IF NOT EXISTS name ON files (name)"
+                # dirs to files table
+                , "CREATE TABLE IF NOT EXISTS dirs_to_files (dir_id INTEGER, file_id INTEGER, media_item_id INTEGER)"
+                , "CREATE UNIQUE INDEX IF NOT EXISTS dir_id_file_id ON dirs_to_files (dir_id, file_id)"
+                ,
+                );
 
-my $sth = $sync_dbh->prepare("SELECT d.name FROM dirs d INNER JOIN hosts_to_dirs htd ON htd.dir_id = d.id INNER JOIN hosts h ON htd.host_id = h.id WHERE h.name = ".$sync_dbh->quote($hostname));
+my $sth = $sync_dbh->prepare("SELECT l.name FROM libraries l INNER JOIN hosts_to_libraries htl ON htl.library_id = l.id INNER JOIN hosts h ON htl.host_id = h.id WHERE h.name = ".$sync_dbh->quote($hostname));
 $sth->execute() || die $sync_dbh->errstr;
+my $library_id = 0;
 if (!$sth->rows()) {
     find(\&wanted, $home_dir);
     if ($songbird_library) {
         &query($sync_dbh, "INSERT INTO libraries (name) VALUES  (".$sync_dbh->quote($songbird_library).")");
-        my $library_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
+        $library_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
         &query($sync_dbh, "INSERT INTO hosts_to_libraries  (host_id, library_id) VALUES ((SELECT id FROM hosts WHERE name = ".$sync_dbh->quote($hostname)."), $library_id)");
     } else {
     }
@@ -46,7 +55,7 @@ if (!$sth->rows()) {
     ($songbird_library) = $sth->fetchrow_array();
 }
 $sth->finish();
-$sync_dbh->disconnect();
+undef $sth;
 
 my $songbird_dbh = DBI->connect("dbi:SQLite:dbname=${songbird_library}", "", "", { RaiseError => 0 }, ) or die $DBI::errstr;
 
@@ -55,9 +64,29 @@ $sth = $songbird_dbh->prepare("SELECT media_item_id, obj FROM resource_propertie
 $sth->execute() || die $songbird_dbh->errstr;
 my %library_data;
 while (my ($media_item_id, $obj) = $sth->fetchrow_array()) {
+    $obj =~ s/\%([A-Fa-f0-9]{2})/pack('C', hex($1))/seg;
     $library_data{$media_item_id} = $obj;
 }
-my $library_path = &LCP(values(%library_data));
+$sth->finish();
+undef $sth;
+my $dir_path = &LCP(values(%library_data));
+
+my $dir_id = 0;
+if ($dir_path) {
+    &query($sync_dbh, "INSERT INTO dirs (name) VALUES  (".$sync_dbh->quote($dir_path).")");
+    $dir_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
+    &query($sync_dbh, "INSERT INTO libraries_to_dirs (library_id, dir_id) VALUES ($library_id, $dir_id)");
+}
+
+foreach my $key (keys(%library_data)) {
+    $library_data{$key} =~ s/^$dir_path//;
+    &query($sync_dbh, "INSERT INTO files (name) VALUES (".$sync_dbh->quote($library_data{$key}).")");
+    my $file_id = $sync_dbh->last_insert_id(undef, undef, undef, undef);
+    &query($sync_dbh, "INSERT INTO dirs_to_files (dir_id, file_id, media_item_id) VALUES ($dir_id, $file_id, $key)");
+}
+
+$songbird_dbh->disconnect();
+$sync_dbh->disconnect();
 
 sub query() {
     my ($dbh) = $_[0];
