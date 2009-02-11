@@ -5,6 +5,7 @@ use strict;
 
 use DBI;
 use File::Find;
+use Smart::Comments;
 no warnings 'File::Find';
 
 chomp(my $hostname = `hostname`);
@@ -12,8 +13,10 @@ my $sync_db_file = ".sqlite_sync_file.db";
 my $home_dir = ( getpwuid $< )[ -2 ] . '/';
 my $songbird_library;
 
+### Connecting to the sqlite database
 my $sync_dbh = DBI->connect("dbi:SQLite:dbname=${home_dir}${sync_db_file}", "", "", { RaiseError => 0 }, ) or die $DBI::errstr;
 
+### Creating necessary tables in sync file
 &query($sync_dbh
                 # hosts table
                 , "CREATE TABLE IF NOT EXISTS hosts (id INTEGER PRIMARY KEY AUTOINCREMENT, name varchar(50) NOT NULL);"
@@ -53,6 +56,7 @@ my $sth = $sync_dbh->prepare("SELECT l.name
 $sth->execute() || die $sync_dbh->errstr;
 my $library_id = 0;
 if (!$sth->rows()) {
+    ### Searching for the existing songbird library file
     find(\&wanted, $home_dir);
     if ($songbird_library) {
         &query($sync_dbh, "INSERT INTO libraries (name) VALUES  (".$sync_dbh->quote($songbird_library).")");
@@ -63,12 +67,11 @@ if (!$sth->rows()) {
 } else {
     ($songbird_library) = $sth->fetchrow_array();
 }
-$sth->finish();
-undef $sth;
+&handle_finish(\$sth);
 
 my $songbird_dbh = DBI->connect("dbi:SQLite:dbname=${songbird_library}", "", "", { RaiseError => 0 }, ) or die $DBI::errstr;
 
-# this is the list of paths
+### Getting global media item information
 $sth = $songbird_dbh->prepare("SELECT media_item_id, obj
                                FROM resource_properties
                                WHERE property_id = 20
@@ -79,8 +82,7 @@ while (my ($media_item_id, $obj) = $sth->fetchrow_array()) {
     $obj =~ s/\%([A-Fa-f0-9]{2})/pack('C', hex($1))/seg;
     $library_data{$media_item_id} = $obj;
 }
-$sth->finish();
-undef $sth;
+&handle_finish(\$sth);
 my $dir_path = &LCP(values(%library_data));
 
 my $dir_id = 0;
@@ -92,7 +94,7 @@ if ($dir_path) {
 
 $sth = $songbird_dbh->prepare("SELECT media_item_id, property_id, obj, obj_sortable, obj_secondary_sortable FROM resource_properties WHERE media_item_id = ? AND property_id NOT IN (20, 29)");
 my $insert = $sync_dbh->prepare("INSERT OR IGNORE INTO resource_properties (file_id, property_id, obj, obj_sortable, obj_secondary_sortable) VALUES (?, ?, ?, ?, ?)");
-foreach my $key (keys(%library_data)) {
+foreach my $key (keys(%library_data)) {   ### File data [===                   ] % done
     my ($file_modified) = $songbird_dbh->selectrow_array("SELECT updated FROM media_items WHERE media_item_id = $key");
     $library_data{$key} =~ s/^$dir_path//;
     &query($sync_dbh, "INSERT OR IGNORE INTO files (name, updated) VALUES (".$sync_dbh->quote($library_data{$key}).", $file_modified)");
@@ -106,6 +108,7 @@ foreach my $key (keys(%library_data)) {
         $insert->execute($file_id, $property_id, $obj, $obj_sortable, $obj_secondary_sortable);
     }
 }
+&handle_finish(\$sth);
 
 $songbird_dbh->disconnect();
 $sync_dbh->disconnect();
@@ -145,4 +148,10 @@ INDEX: foreach my $ch ( split //, $first ) {
     }
     continue { $i++ }
     return substr $first, 0, $i;
+}
+
+sub handle_finish() {
+    my ($h) = @_;
+    $h->finish();
+    undef $h;
 }
