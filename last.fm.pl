@@ -9,6 +9,7 @@ use Getopt::Long;
 use Net::LastFM;
 use Smart::Comments;
 use Storable;
+no warnings 'File::Find';
 
 my $home_dir = ( getpwuid $< )[ -2 ] . '/';
 my $user = "gms8994";
